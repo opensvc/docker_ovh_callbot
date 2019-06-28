@@ -86,6 +86,7 @@ Using OpenSVC to orchestrate Docker container is an efficient way of automate st
 
 ### Secret Creation
 
+#### Create keys
 ```
 $ om sec/ovhclient add --key endpoint --value ovh-eu
 $ om sec/ovhclient add --key application_key --value rIksDzjVfgRTsmAP
@@ -95,6 +96,7 @@ $ om sec/ovhclient add --key billing_account --value vc12345-ovh-1
 $ om sec/ovhclient add --key sip_line_number --value 0033972012345
 ```
 
+#### Display keys for secret
 ```
 $ om sec/ovhclient keys
 application_key
@@ -102,7 +104,8 @@ application_secret
 billing_account
 consumer_key
 endpoint
-sip_line_number```
+sip_line_number
+```
 
 
 ### Option 1 : As a container
