@@ -88,6 +88,7 @@ Using OpenSVC to orchestrate Docker container is an efficient way of automate st
 
 #### Create keys
 ```
+$ om sec/ovhclient create
 $ om sec/ovhclient add --key endpoint --value ovh-eu
 $ om sec/ovhclient add --key application_key --value rIksDzjVfgRTsmAP
 $ om sec/ovhclient add --key application_secret --value 1qEFGlks45FRGH234Abhdsjt99abDFRF
