@@ -1,4 +1,10 @@
-FROM python:3-alpine
+FROM python:3.13-alpine
+
+LABEL org.opencontainers.image.source="https://github.com/opensvc/docker_ovh_callbot"
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /opt
 
@@ -8,9 +14,11 @@ RUN pip install -r requirements.txt
 
 COPY callbot.py .
 
-COPY ./docker-entrypoint.sh /
+COPY docker-entrypoint.sh /
 
 RUN chmod +x /docker-entrypoint.sh
+
+USER nobody
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 

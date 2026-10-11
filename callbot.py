@@ -1,12 +1,13 @@
 # -*- encoding: utf-8 -*-
 
 import json
-import ovh
+import logging
 import os
-import time
+import re
 import sys
-import inspect
-from datetime import datetime
+import time
+
+import ovh
 
 # mandatory variables, example below
 #
@@ -14,7 +15,7 @@ from datetime import datetime
 # OVH_APP_KEY=rIksDzjVfgRTsmAP
 # OVH_APP_SEC=1qEFGlks45FRGH234Abhdsjt99abDFRF
 # OVH_CONS_KEY=EEJdlkzox4dkjb5nqiubf5jjSSF45flk
-# BOT_NUMBER_LIST=0102030405,0203040506,0304050607
+# BOT_NUMBER_LIST=0102030405,0203040506,0304050607   (not needed in check mode)
 # OVH_BILLING_ACCOUNT=vc12345-ovh-1
 # OVH_SIP_LINE_NUMBER=0033972012345
 
@@ -22,159 +23,225 @@ from datetime import datetime
 #
 # OVH_TEXT_MESSAGE="We all have two lives, the second begins when we realize we only have one"
 # OVH_ANONYMOUS_CALL=False
-# OVH_CALL_TIMEOUT=20
-# BOT_WAIT_BEFORE_API_CHECK=20
+# OVH_CALL_TIMEOUT=20               ring duration, in seconds
+# OVH_DIALPLAN=ReadText             ReadText, RequestAppointmentConfirmation, ...
+# BOT_REQUIRE_DTMF=                 if set (ex: "1"), a call is acknowledged only if
+#                                   one of these keys was pressed. A voicemail can't.
 # BOT_WAIT_BEFORE_NEXT_CALL=10
+# BOT_CALL_MAX_WAIT=300             max seconds to wait for a call to hang up
+# BOT_POLL_INTERVAL=5               seconds between two call status queries
 # BOT_TRY_COUNT_PER_NUMBER=1
 # BOT_RING_UNTIL_ANSWER=False
+# BOT_MAX_DURATION=0                give up after this many seconds (0 = never)
+# BOT_DEBUG=False                   dump the call status returned by the api
+#
+# exit codes: 0 acknowledged (or check ok), 1 nobody acknowledged (or check
+# failed), 2 configuration error.
 
-vars = [ \
-         'OVH_ENDPOINT',\
-         'OVH_APP_KEY',\
-         'OVH_APP_SEC',\
-         'OVH_CONS_KEY',\
-         'BOT_NUMBER_LIST',\
-         'OVH_BILLING_ACCOUNT',\
-         'OVH_SIP_LINE_NUMBER',\
-       ]
-
-
-for elem in vars:
-    if elem not in os.environ:
-        print("error : %s is not set in environment. exiting."%elem)
-        import sys
-        sys.exit(1)
-
-
-# Instanciate an OVH Client.
-# You can generate new credentials with full access to your account on
-# the token creation page
-client = ovh.Client(
-    endpoint=os.environ.get('OVH_ENDPOINT'),               # Endpoint of API OVH Europe (List of available endpoints)
-    application_key=os.environ.get('OVH_APP_KEY'),         # Application Key
-    application_secret=os.environ.get('OVH_APP_SEC'),      # Application Secret
-    consumer_key=os.environ.get('OVH_CONS_KEY'),           # Consumer Key
+logging.basicConfig(
+    format="[%(asctime)s] %(levelname)s %(message)s",
+    level=logging.INFO,
+    stream=sys.stdout,
 )
+log = logging.getLogger("callbot")
 
-# ovh billing account unique identifier
-ovhaccount = os.environ.get('OVH_BILLING_ACCOUNT')
+EXIT_OK = 0
+EXIT_NO_ACK = 1
+EXIT_CONFIG = 2
 
-# ovh sip line that makes the call
-sipline = os.environ.get('OVH_SIP_LINE_NUMBER')
 
-# text message to announce when communication is established
-if 'OVH_TEXT_MESSAGE' in os.environ:
-    message = os.environ.get('OVH_TEXT_MESSAGE')
-else:
-    message = "We all have two lives, the second begins when we realize we only have one"
+def env_str(name, default=None):
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return value
 
-# list of oncall phone numbers to iterate on
-oncallnumbers = os.environ.get('BOT_NUMBER_LIST')
-numbers = []
-numbers.append(oncallnumbers)
-if ' ' in oncallnumbers:
-    numbers = oncallnumbers.split(' ')
-if ',' in oncallnumbers:
-    numbers = oncallnumbers.split(',')
 
-# enable anonymous call
-if 'OVH_ANONYMOUS_CALL' in os.environ:
-    anonymous = os.environ.get('OVH_ANONYMOUS_CALL')
-else:
-    anonymous = "false"
-
-# call ring duration
-if 'OVH_CALL_TIMEOUT' in os.environ:
-    calltimeout = os.environ.get('OVH_CALL_TIMEOUT')
-else:
-    calltimeout = 20
-
-# time to wait before asking call status to API
-# should be greater than ring duration
-if 'BOT_WAIT_BEFORE_API_CHECK' in os.environ:
-    apisleep = os.environ.get('BOT_WAIT_BEFORE_API_CHECK')
-else:
-    apisleep = 30
-
-# time to wait between calls
-if 'BOT_WAIT_BEFORE_NEXT_CALL' in os.environ:
-    callsleep = os.environ.get('BOT_WAIT_BEFORE_NEXT_CALL')
-else:
-    callsleep = 10
-
-# number of try per phone number
-if 'BOT_TRY_COUNT_PER_NUMBER' in os.environ:
-    trycount = os.environ.get('BOT_TRY_COUNT_PER_NUMBER')
-else:
-    trycount = 1
-
-# loop over all numbers until someone answer
-if 'BOT_RING_UNTIL_ANSWER' in os.environ:
-    ring_until_answer = os.environ.get('BOT_RING_UNTIL_ANSWER')
-else:
-    ring_until_answer = False
-
-baseapi = '/telephony/' + ovhaccount + '/line/' + sipline
-
-def make_call(phonenumber,msg):
-    result = client.post(baseapi + '/automaticCall',
-        bridgeNumberDialplan=None, # Number to call if transfer in dialplan selected (type: phoneNumber)
-        calledNumber=phonenumber, # Number to call (type: phoneNumber)
-        callingNumber=sipline, # Optional, number where the call come from (type: phoneNumber)
-        dialplan='ReadText', # Dialplan used for the call (type: telephony.CallsGeneratorDialplanEnum)
-        isAnonymous=anonymous, # For anonymous call (type: boolean)
-        playbackAudioFileDialplan=None, # Name of the audioFile (if needed) with extention. This audio file must have been upload previously (type: string)
-        timeout=calltimeout, # Timeout (in seconds). Default is 20 seconds (type: long)
-        ttsTextDialplan=msg, # Text to read if TTS on dialplan selected (type: string)
-    )
-    return str(result)
-
-def logit(msg, stdout=True, stderr=False):
-    curframe = inspect.currentframe()
-    calframe = inspect.getouterframes(curframe, 2)
+def env_int(name, default):
+    value = env_str(name)
+    if value is None:
+        return default
     try:
-        timestamp = str(datetime.now())
-    except:
-        timestamp = '?'
+        return int(value)
+    except ValueError:
+        log.error("%s=%r is not an integer", name, value)
+        sys.exit(EXIT_CONFIG)
 
-    content = '['+calframe[1][3]+']['+timestamp+'] '+msg
-    if stdout:
-        sys.stdout.write(content+"\n")
-    if stderr:
-        sys.stderr.write("error ==> %s\n" % (content))
 
-def get_call_info(callid):
-    result = client.get(baseapi +'/automaticCall/' + callid)
-    return result
+def env_bool(name, default):
+    value = env_str(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "y", "on")
 
-def display_call_info(callid):
-    payload = get_call_info(callid)
-    print("%s"%json.dumps(payload, indent=4))
 
-def ring_loop(number, iteration=1):
-    cpt = int(iteration) + 1
-    for i in range(1, cpt):
-        logit("Ringing %s   [try %s/%s]"%(number, i, iteration))
-        mycall = make_call(number, message)
-        logit("    => waiting %s seconds before querying api for call status"%apisleep)
-        time.sleep(apisleep)
-        data = get_call_info(mycall)
-        #display_call_info(mycall)
-        if data['callDuration'] > 0 and data['answerDatetime'] is not None:
-            logit("    => communication established at %s for %s seconds"%(data['answerDatetime'], data['callDuration']))
-            sys.exit(0)
+def parse_numbers(value):
+    # accept comma and/or space separated lists, ignore stray quotes
+    value = value.replace('"', "").replace("'", "")
+    return [n for n in re.split(r"[\s,]+", value) if n]
+
+
+def check_mandatory(names):
+    missing = [n for n in names if not env_str(n)]
+    if missing:
+        log.error("not set in environment: %s. exiting.", ", ".join(missing))
+        sys.exit(EXIT_CONFIG)
+
+
+class CallBot(object):
+    def __init__(self):
+        self.client = ovh.Client(
+            endpoint=env_str("OVH_ENDPOINT"),
+            application_key=env_str("OVH_APP_KEY"),
+            application_secret=env_str("OVH_APP_SEC"),
+            consumer_key=env_str("OVH_CONS_KEY"),
+        )
+        self.baseapi = "/telephony/%s/line/%s" % (
+            env_str("OVH_BILLING_ACCOUNT"),
+            env_str("OVH_SIP_LINE_NUMBER"),
+        )
+        self.sipline = env_str("OVH_SIP_LINE_NUMBER")
+        self.message = env_str(
+            "OVH_TEXT_MESSAGE",
+            "We all have two lives, the second begins when we realize we only have one",
+        )
+        self.anonymous = env_bool("OVH_ANONYMOUS_CALL", False)
+        self.calltimeout = env_int("OVH_CALL_TIMEOUT", 20)
+        self.dialplan = env_str("OVH_DIALPLAN", "ReadText")
+        self.require_dtmf = env_str("BOT_REQUIRE_DTMF")
+        self.callsleep = env_int("BOT_WAIT_BEFORE_NEXT_CALL", 10)
+        self.call_max_wait = env_int("BOT_CALL_MAX_WAIT", 300)
+        self.poll_interval = env_int("BOT_POLL_INTERVAL", 5)
+        self.trycount = env_int("BOT_TRY_COUNT_PER_NUMBER", 1)
+        self.ring_until_answer = env_bool("BOT_RING_UNTIL_ANSWER", False)
+        self.max_duration = env_int("BOT_MAX_DURATION", 0)
+        self.debug = env_bool("BOT_DEBUG", False)
+        self.started = time.time()
+
+    def expired(self):
+        return self.max_duration > 0 and time.time() - self.started > self.max_duration
+
+    def make_call(self, number):
+        result = self.client.post(
+            self.baseapi + "/automaticCall",
+            calledNumber=number,
+            callingNumber=self.sipline,
+            dialplan=self.dialplan,
+            isAnonymous=self.anonymous,
+            timeout=self.calltimeout,
+            ttsTextDialplan=self.message,
+        )
+        return str(result)
+
+    def wait_call_end(self, callid):
+        """
+        Poll the call status until the api reports a hangup, instead of
+        guessing how long the call lasts. Return the last status seen.
+        """
+        deadline = time.time() + self.call_max_wait
+        data = None
+        while time.time() < deadline:
+            time.sleep(self.poll_interval)
+            try:
+                data = self.client.get(self.baseapi + "/automaticCall/" + callid)
+            except Exception as exc:
+                # the call may not be visible yet, or a transient api error
+                log.warning("    => call %s status query failed: %s", callid, exc)
+                continue
+            if data.get("hangupDatetime"):
+                return data
+        log.warning("    => call %s not hung up after %ss", callid, self.call_max_wait)
+        return data
+
+    def acknowledged(self, data):
+        if not data:
+            return False
+        answered = (data.get("callDuration") or 0) > 0 and data.get("answerDatetime") is not None
+        if not answered:
+            return False
+        if not self.require_dtmf:
+            return True
+        keys = (data.get("dtmf") or "").replace(",", "")
+        return any(k in keys for k in self.require_dtmf)
+
+    def ring(self, number, attempt):
+        log.info("Ringing %s   [try %s/%s]", number, attempt, self.trycount)
+        try:
+            callid = self.make_call(number)
+        except Exception as exc:
+            log.error("    => call to %s failed: %s", number, exc)
+            return False
+        data = self.wait_call_end(callid)
+        if self.debug:
+            log.info("    => call status:\n%s", json.dumps(data, indent=4, default=str))
+        if self.acknowledged(data):
+            log.info(
+                "    => acknowledged at %s, call lasted %ss, dtmf %r",
+                data.get("answerDatetime"), data.get("callDuration"), data.get("dtmf"),
+            )
+            return True
+        if data:
+            log.info(
+                "    => not acknowledged: answer %s, duration %s, dtmf %r, hangup cause %s",
+                data.get("answerDatetime"), data.get("callDuration"),
+                data.get("dtmf"), data.get("hangupCause"),
+            )
         else:
-            logit("    => no answer")
-        logit("    => waiting %s seconds before next call"%callsleep)
-        time.sleep(callsleep)
+            log.info("    => not acknowledged: no call status")
+        return False
 
-def oncall_loop():
-    for num in numbers:
-        logit("Calling number %s"%num)
-        ring_loop(num, iteration=trycount)
+    def run(self, numbers):
+        log.info(
+            "Oncall bot started: numbers %s, dialplan %s, require dtmf %r",
+            " ".join(numbers), self.dialplan, self.require_dtmf,
+        )
+        while True:
+            for number in numbers:
+                log.info("Calling number %s", number)
+                for attempt in range(1, self.trycount + 1):
+                    if self.expired():
+                        log.error("nobody acknowledged within %ss. giving up.", self.max_duration)
+                        return EXIT_NO_ACK
+                    if self.ring(number, attempt):
+                        return EXIT_OK
+                    log.info("    => waiting %s seconds before next call", self.callsleep)
+                    time.sleep(self.callsleep)
+            if not self.ring_until_answer:
+                log.error("nobody acknowledged. giving up.")
+                return EXIT_NO_ACK
 
-logit("Oncall Bot started at UTC %s\n"%datetime.now())
-while True:
-    oncall_loop()
-    if not ring_until_answer:
-        break
+    def check(self):
+        """
+        Validate the api access (tls, credentials, line) without making a call.
+        """
+        try:
+            line = self.client.get(self.baseapi)
+        except Exception as exc:
+            log.error("check failed: %s", exc)
+            return EXIT_NO_ACK
+        log.info("check ok: line %s", line.get("serviceName", self.sipline))
+        return EXIT_OK
+
+
+def main(argv):
+    mandatory = [
+        "OVH_ENDPOINT",
+        "OVH_APP_KEY",
+        "OVH_APP_SEC",
+        "OVH_CONS_KEY",
+        "OVH_BILLING_ACCOUNT",
+        "OVH_SIP_LINE_NUMBER",
+    ]
+    if "--check" in argv:
+        check_mandatory(mandatory)
+        return CallBot().check()
+    check_mandatory(mandatory + ["BOT_NUMBER_LIST"])
+    numbers = parse_numbers(env_str("BOT_NUMBER_LIST"))
+    if not numbers:
+        log.error("BOT_NUMBER_LIST is empty. exiting.")
+        return EXIT_CONFIG
+    return CallBot().run(numbers)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -37,14 +37,34 @@ Text message being read when communication is established
 Present or not the OVH SIP line number
 #### `OVH_CALL_TIMEOUT=20`
 Ring duration
-#### `BOT_WAIT_BEFORE_API_CHECK=30`
-Once the call is requested on the api, we wait before requesting for its status
+#### `OVH_DIALPLAN=ReadText`
+OVH dialplan used for the call: `ReadText`, `RequestAppointmentConfirmation` or `RequestAppointmentConfirmationWithTransfer`
+#### `BOT_REQUIRE_DTMF=`
+If set (ex: `1`), a call is considered acknowledged only if one of these keys was pressed during the call. A voicemail can not press a key, so it can not acknowledge the call. Use with a dialplan that collects keys, like `RequestAppointmentConfirmation`.
 #### `BOT_WAIT_BEFORE_NEXT_CALL=10`
 Once the call status is known, we sleep before initiating a new call
+#### `BOT_CALL_MAX_WAIT=300`
+Maximum number of seconds to wait for a call to hang up
+#### `BOT_POLL_INTERVAL=5`
+Number of seconds between two call status requests on the api
 #### `BOT_TRY_COUNT_PER_NUMBER=1`
 Number of times the bot will try to contact a single phone number
 #### `BOT_RING_UNTIL_ANSWER=False`
 With this parameter enabled, the bot will do an infinite loop, until someone actually takes the call
+#### `BOT_MAX_DURATION=0`
+Give up after this number of seconds. `0` means never.
+#### `BOT_DEBUG=False`
+Dump the call status returned by the api
+
+### Exit codes
+
+- `0` the call was acknowledged, or the check succeeded
+- `1` nobody acknowledged the call, or the check failed
+- `2` configuration error
+
+### Check mode
+
+`docker run --env-file test.envfile opensvc/ovh_callbot:latest check` validates the api access (tls, credentials, sip line) without making any call. The `BOT_NUMBER_LIST` variable is not needed in this mode.
 
 ## Usage
 
@@ -68,16 +88,13 @@ OVH_TEXT_MESSAGE="Wake up, Wake up"
 
 ```
 $ ./test.bash 
-[<module>][2019-06-28 13:50:02.689931] Oncall Bot started at UTC 2019-06-28 13:50:02.677553
-
-[oncall_loop][2019-06-28 13:50:02.690208] Calling number 0102030405
-[ring_loop][2019-06-28 13:50:02.690576] Ringing 0102030405   [try 1/3]
-[ring_loop][2019-06-28 13:50:03.064803]     => waiting 30 seconds before querying api for call status
-[ring_loop][2019-06-28 13:50:33.495086]     => no answer
-[ring_loop][2019-06-28 13:50:33.496267]     => waiting 10 seconds before next call
-[ring_loop][2019-06-28 13:50:43.507922] Ringing 0102030405   [try 2/3]
-[ring_loop][2019-06-28 13:50:44.046116]     => waiting 30 seconds before querying api for call status
-[ring_loop][2019-06-28 13:51:14.143670]     => communication established at 2019-06-28T15:50:47+02:00 for 4 seconds
+[2026-10-11 20:06:13,211] INFO Oncall bot started: numbers 0102030405, dialplan RequestAppointmentConfirmation, require dtmf '1'
+[2026-10-11 20:06:13,212] INFO Calling number 0102030405
+[2026-10-11 20:06:13,212] INFO Ringing 0102030405   [try 1/3]
+[2026-10-11 20:07:22,112] INFO     => not acknowledged: answer 2026-10-11T22:06:39+02:00, duration 41, dtmf None, hangup cause NormalCallClearing
+[2026-10-11 20:07:22,112] INFO     => waiting 10 seconds before next call
+[2026-10-11 20:07:32,114] INFO Ringing 0102030405   [try 2/3]
+[2026-10-11 20:07:58,185] INFO     => acknowledged at 2026-10-11T22:07:40+02:00, call lasted 15s, dtmf '1,'
 ```
 
 ## OpenSVC integration
