@@ -1,0 +1,50 @@
+name: build
+
+# Rebuild monthly so the base image, certifi and the ovh module stay current.
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: "0 4 1 * *"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute the date tag
+        id: date
+        run: echo "tag=$(date -u +%Y.%m.%d)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          pull: true
+          load: true
+          tags: ovh_callbot:ci
+
+      - name: Check the bot starts and reaches the OVH api over tls
+        run: |
+          set +e
+          docker run --rm ovh_callbot:ci; rc=$?
+          test $rc -eq 2 || { echo "expected exit code 2 without env, got $rc"; exit 1; }
+          docker run --rm --entrypoint python ovh_callbot:ci -c 'import ovh; ovh.Client(endpoint="ovh-eu", application_key="x", application_secret="y").get("/auth/time", _need_auth=False)'
+
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            opensvc/ovh_callbot:latest
+            opensvc/ovh_callbot:${{ steps.date.outputs.tag }}
