@@ -38,9 +38,12 @@ Present or not the OVH SIP line number
 #### `OVH_CALL_TIMEOUT=20`
 Ring duration
 #### `OVH_DIALPLAN=ReadText`
-OVH dialplan used for the call: `ReadText`, `RequestAppointmentConfirmation` or `RequestAppointmentConfirmationWithTransfer`
-#### `BOT_REQUIRE_DTMF=`
-If set (ex: `1`), a call is considered acknowledged only if one of these keys was pressed during the call. A voicemail can not press a key, so it can not acknowledge the call. Use with a dialplan that collects keys, like `RequestAppointmentConfirmation`.
+OVH dialplan used for the call:
+- `ReadText` reads the text message and hangs up immediately
+- `RequestAppointmentConfirmation` reads the text message, then asks the callee to press a key to confirm an appointment
+- `RequestAppointmentConfirmationWithTransfer`
+#### `BOT_ACK_RESULTS=`
+If set (ex: `rdvConfirmed`), a call is considered acknowledged only if its `applicationResult` is in this comma or space separated list. Otherwise any answered call is acknowledged, including a voicemail. Use `OVH_DIALPLAN=RequestAppointmentConfirmation` and `BOT_ACK_RESULTS=rdvConfirmed` so a voicemail can not acknowledge the call. The `dtmf` field of the call is not reliable, so it is not used.
 #### `BOT_WAIT_BEFORE_NEXT_CALL=10`
 Once the call status is known, we sleep before initiating a new call
 #### `BOT_CALL_MAX_WAIT=300`
@@ -88,13 +91,13 @@ OVH_TEXT_MESSAGE="Wake up, Wake up"
 
 ```
 $ ./test.bash 
-[2026-10-11 20:06:13,211] INFO Oncall bot started: numbers 0102030405, dialplan RequestAppointmentConfirmation, require dtmf '1'
+[2026-10-11 20:06:13,211] INFO Oncall bot started: numbers 0102030405, dialplan RequestAppointmentConfirmation, ack results rdvConfirmed
 [2026-10-11 20:06:13,212] INFO Calling number 0102030405
 [2026-10-11 20:06:13,212] INFO Ringing 0102030405   [try 1/3]
-[2026-10-11 20:07:22,112] INFO     => not acknowledged: answer 2026-10-11T22:06:39+02:00, duration 41, dtmf None, hangup cause NormalCallClearing
+[2026-10-11 20:07:22,112] INFO     => not acknowledged: answer 2026-10-11T22:06:39+02:00, duration 41, result no_DTMF_hangup, hangup cause NormalCallClearing
 [2026-10-11 20:07:22,112] INFO     => waiting 10 seconds before next call
 [2026-10-11 20:07:32,114] INFO Ringing 0102030405   [try 2/3]
-[2026-10-11 20:07:58,185] INFO     => acknowledged at 2026-10-11T22:07:40+02:00, call lasted 15s, dtmf '1,'
+[2026-10-11 20:07:58,185] INFO     => acknowledged at 2026-10-11T22:07:40+02:00, call lasted 15s, result rdvConfirmed
 ```
 
 ## OpenSVC integration

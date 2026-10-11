@@ -24,9 +24,12 @@ import ovh
 # OVH_TEXT_MESSAGE="We all have two lives, the second begins when we realize we only have one"
 # OVH_ANONYMOUS_CALL=False
 # OVH_CALL_TIMEOUT=20               ring duration, in seconds
-# OVH_DIALPLAN=ReadText             ReadText, RequestAppointmentConfirmation, ...
-# BOT_REQUIRE_DTMF=                 if set (ex: "1"), a call is acknowledged only if
-#                                   one of these keys was pressed. A voicemail can't.
+# OVH_DIALPLAN=ReadText             ReadText reads the text and hangs up.
+#                                   RequestAppointmentConfirmation reads the text,
+#                                   then asks to press a key to confirm.
+# BOT_ACK_RESULTS=                  if set (ex: "rdvConfirmed"), a call is acknowledged
+#                                   only if its applicationResult is in this list.
+#                                   A voicemail can't confirm, so it can't acknowledge.
 # BOT_WAIT_BEFORE_NEXT_CALL=10
 # BOT_CALL_MAX_WAIT=300             max seconds to wait for a call to hang up
 # BOT_POLL_INTERVAL=5               seconds between two call status queries
@@ -75,7 +78,7 @@ def env_bool(name, default):
     return value.strip().lower() in ("1", "true", "yes", "y", "on")
 
 
-def parse_numbers(value):
+def parse_list(value):
     # accept comma and/or space separated lists, ignore stray quotes
     value = value.replace('"', "").replace("'", "")
     return [n for n in re.split(r"[\s,]+", value) if n]
@@ -108,7 +111,7 @@ class CallBot(object):
         self.anonymous = env_bool("OVH_ANONYMOUS_CALL", False)
         self.calltimeout = env_int("OVH_CALL_TIMEOUT", 20)
         self.dialplan = env_str("OVH_DIALPLAN", "ReadText")
-        self.require_dtmf = env_str("BOT_REQUIRE_DTMF")
+        self.ack_results = parse_list(env_str("BOT_ACK_RESULTS", ""))
         self.callsleep = env_int("BOT_WAIT_BEFORE_NEXT_CALL", 10)
         self.call_max_wait = env_int("BOT_CALL_MAX_WAIT", 300)
         self.poll_interval = env_int("BOT_POLL_INTERVAL", 5)
@@ -159,10 +162,11 @@ class CallBot(object):
         answered = (data.get("callDuration") or 0) > 0 and data.get("answerDatetime") is not None
         if not answered:
             return False
-        if not self.require_dtmf:
+        if not self.ack_results:
             return True
-        keys = (data.get("dtmf") or "").replace(",", "")
-        return any(k in keys for k in self.require_dtmf)
+        # the dtmf field is not reliable (a confirmed call can report ","),
+        # the application result is.
+        return data.get("applicationResult") in self.ack_results
 
     def ring(self, number, attempt):
         log.info("Ringing %s   [try %s/%s]", number, attempt, self.trycount)
@@ -176,15 +180,15 @@ class CallBot(object):
             log.info("    => call status:\n%s", json.dumps(data, indent=4, default=str))
         if self.acknowledged(data):
             log.info(
-                "    => acknowledged at %s, call lasted %ss, dtmf %r",
-                data.get("answerDatetime"), data.get("callDuration"), data.get("dtmf"),
+                "    => acknowledged at %s, call lasted %ss, result %s",
+                data.get("answerDatetime"), data.get("callDuration"), data.get("applicationResult"),
             )
             return True
         if data:
             log.info(
-                "    => not acknowledged: answer %s, duration %s, dtmf %r, hangup cause %s",
+                "    => not acknowledged: answer %s, duration %s, result %s, hangup cause %s",
                 data.get("answerDatetime"), data.get("callDuration"),
-                data.get("dtmf"), data.get("hangupCause"),
+                data.get("applicationResult"), data.get("hangupCause"),
             )
         else:
             log.info("    => not acknowledged: no call status")
@@ -192,8 +196,8 @@ class CallBot(object):
 
     def run(self, numbers):
         log.info(
-            "Oncall bot started: numbers %s, dialplan %s, require dtmf %r",
-            " ".join(numbers), self.dialplan, self.require_dtmf,
+            "Oncall bot started: numbers %s, dialplan %s, ack results %s",
+            " ".join(numbers), self.dialplan, " ".join(self.ack_results) or "any answer",
         )
         while True:
             for number in numbers:
@@ -236,7 +240,7 @@ def main(argv):
         check_mandatory(mandatory)
         return CallBot().check()
     check_mandatory(mandatory + ["BOT_NUMBER_LIST"])
-    numbers = parse_numbers(env_str("BOT_NUMBER_LIST"))
+    numbers = parse_list(env_str("BOT_NUMBER_LIST"))
     if not numbers:
         log.error("BOT_NUMBER_LIST is empty. exiting.")
         return EXIT_CONFIG
