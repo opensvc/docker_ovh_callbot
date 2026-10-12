@@ -69,6 +69,30 @@ Dump the call status returned by the api
 
 `docker run --env-file test.envfile opensvc/ovh_callbot:latest check` validates the api access (tls, credentials, sip line) without making any call. The `BOT_NUMBER_LIST` variable is not needed in this mode.
 
+### Server mode
+
+`docker run --env-file test.envfile -p 8080:8080 opensvc/ovh_callbot:latest serve` starts an http server, so a call can be triggered by a webhook (a Zammad trigger for example).
+
+- `POST /call` starts the oncall loop in the background and answers `202` at once. Only one loop runs at a time: a request received while a loop is running is answered `200` with `{"status": "already running"}`, and no new loop is started.
+- `GET /health` answers `200` with the last run status. It needs no authentication and is not logged, so it can be used by a load balancer health check.
+
+`POST /call` must be authenticated by at least one of:
+
+#### `CALLBOT_HMAC_SECRET=`
+The request must have a `X-Hub-Signature: sha1=<hex hmac-sha1 of the body>` header. This is the signature sent by Zammad webhooks.
+#### `CALLBOT_TOKEN=`
+The request must have a `Authorization: Bearer <token>` header.
+
+The server refuses to start if none is set.
+
+#### `CALLBOT_LISTEN=0.0.0.0:8080`
+The listening address and port.
+
+```
+$ curl -X POST -H "Authorization: Bearer $CALLBOT_TOKEN" https://callbot.example.com/call
+{"status": "started"}
+```
+
 ## Usage
 
 ### Step 1

@@ -244,6 +244,9 @@ def main(argv):
     if not numbers:
         log.error("BOT_NUMBER_LIST is empty. exiting.")
         return EXIT_CONFIG
+    if "--serve" in argv:
+        import server
+        return server.serve(numbers)
     return CallBot().run(numbers)
 
 
